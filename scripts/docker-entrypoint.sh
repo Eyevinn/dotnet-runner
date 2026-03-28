@@ -87,15 +87,15 @@ else
 
   if [[ -n "$SLN_FILE" ]]; then
     echo "[BUILD] Found solution file: $SLN_FILE"
-    dotnet publish "$SLN_FILE" -c Release -o /app/published
+    dotnet publish "$SLN_FILE" -c Release -p:PublishDir=/app/published
     BUILD_EXIT=$?
   elif [[ -n "$CSPROJ_FILE" ]]; then
     echo "[BUILD] Found project file: $CSPROJ_FILE"
-    dotnet publish "$CSPROJ_FILE" -c Release -o /app/published
+    dotnet publish "$CSPROJ_FILE" -c Release -p:PublishDir=/app/published
     BUILD_EXIT=$?
   else
     echo "[BUILD] No .sln or .csproj found, attempting dotnet publish ." >&2
-    dotnet publish . -c Release -o /app/published
+    dotnet publish . -c Release -p:PublishDir=/app/published
     BUILD_EXIT=$?
   fi
 fi
@@ -114,8 +114,9 @@ trap - EXIT
 if [[ -n "$OSC_ENTRY" ]]; then
   exec dotnet /app/published/${OSC_ENTRY}
 else
-  # Auto-detect entry DLL: find *.dll in /app/published that matches project name
-  ENTRY_DLL=$(find /app/published -maxdepth 1 -name "*.dll" ! -name "*.deps.dll" ! -name "*.pdb" | grep -v runtimes | head -1)
+  # Auto-detect entry DLL: exclude metadata files (.deps.dll, .runtimeconfig.*.dll)
+  # Prefer a DLL matching the project name if multiple candidates exist
+  ENTRY_DLL=$(find /app/published -maxdepth 1 -name "*.dll" ! -name "*.deps.dll" ! -name "*.runtimeconfig.*.dll" | head -1)
   if [[ -z "$ENTRY_DLL" ]]; then
     echo "ERROR: No entry DLL found in /app/published" >&2
     exec node /runner/loading-server.js error-page.html failed

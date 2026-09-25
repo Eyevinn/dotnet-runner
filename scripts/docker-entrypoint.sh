@@ -72,22 +72,38 @@ GIT_PATH="/${SOURCE_URL#*://*/}"
 [[ "/${SOURCE_URL}" == "${GIT_PATH}" ]] && GIT_PATH="/"
 PROTOCOL="${SOURCE_URL%%://*}"
 
-# Inject token if provided (GitHub / GIT_TOKEN path)
+# Build auth args for git clone. Credentials are passed via a scoped
+# http.<url>/.extraheader config override rather than embedded in the clone
+# URL, so they never appear in process args, in git's own error output, or
+# in .git/config.
 GIT_TOKEN="${GIT_TOKEN:-$GITHUB_TOKEN}"
+GIT_AUTH_ARGS=()
 if [[ -n "$GIT_TOKEN" ]]; then
-  SOURCE_URL="${PROTOCOL}://${GIT_TOKEN}@${GIT_HOST_PUBLIC}${GIT_PATH}"
+  AUTH_B64=$(printf '%s' "x-access-token:${GIT_TOKEN}" | base64 | tr -d '\n')
+  GIT_AUTH_ARGS=(-c "http.${PROTOCOL}://${GIT_HOST_PUBLIC}/.extraheader=AUTHORIZATION: basic ${AUTH_B64}")
+elif [[ "$GIT_HOST" != "$GIT_HOST_PUBLIC" ]]; then
+  # Gitea: SOURCE_URL pre-embeds user:pass@host — reuse as Basic-Auth pair.
+  # Use %@* (single %, shortest suffix from the right / last "@") to match
+  # the ##*@ convention used for GIT_HOST_PUBLIC elsewhere in this script —
+  # a password containing a literal "@" must not be truncated.
+  CREDS="${GIT_HOST%@*}"
+  AUTH_B64=$(printf '%s' "$CREDS" | base64 | tr -d '\n')
+  GIT_AUTH_ARGS=(-c "http.${PROTOCOL}://${GIT_HOST_PUBLIC}/.extraheader=AUTHORIZATION: basic ${AUTH_B64}")
 fi
+
+git_scrub_stderr() {
+  "$@" 2> >(sed -r 's/gh[pso]_[A-Za-z0-9]{20,}/[REDACTED]/g; s/([Bb]asic )[A-Za-z0-9+\/=]{8,}/\1[REDACTED]/g' >&2)
+}
 
 rm -rf "$WORK_DIR"
 if [[ -n "$BRANCH" ]]; then
-  git clone --branch "$BRANCH" --depth 1 "$SOURCE_URL" "$WORK_DIR"
+  git_scrub_stderr git "${GIT_AUTH_ARGS[@]}" clone --branch "$BRANCH" --depth 1 "${PROTOCOL}://${GIT_HOST_PUBLIC}${GIT_PATH}" "$WORK_DIR"
 else
-  git clone --depth 1 "$SOURCE_URL" "$WORK_DIR"
+  git_scrub_stderr git "${GIT_AUTH_ARGS[@]}" clone --depth 1 "${PROTOCOL}://${GIT_HOST_PUBLIC}${GIT_PATH}" "$WORK_DIR"
 fi
 
-# Scrub credentials from origin remote — tokens and embedded credentials must
-# not persist to .git/config. This covers both the GIT_TOKEN path and the
-# Gitea embedded-credential path (https://user:pass@host/path).
+# Ensure the persisted remote URL is credential-free — belt-and-braces, since
+# the clone URL never carried credentials to begin with.
 git -C "$WORK_DIR" remote set-url origin "${PROTOCOL}://${GIT_HOST_PUBLIC}${GIT_PATH}"
 
 write_commit_info "$WORK_DIR"
